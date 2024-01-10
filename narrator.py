@@ -1,15 +1,27 @@
-import os
 from openai import OpenAI
 import base64
-import json
-import time
-import simpleaudio as sa
 import errno
-from elevenlabs import generate, play, set_api_key, voices
+from elevenlabs import generate, play, set_api_key
+from pynput import keyboard
+import cv2
+import time
+from PIL import Image
+import numpy as np
+import os
+import pyautogui
 
-client = OpenAI()
+OAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=OAI_API_KEY)
 
-set_api_key(os.environ.get("ELEVENLABS_API_KEY"))
+set_api_key(os.environ.get("ELEVEN_API_KEY"))
+
+# Folder
+folder = "frames"
+
+# Create the frames folder if it doesn't exist
+frames_dir = os.path.join(os.getcwd(), folder)
+os.makedirs(frames_dir, exist_ok=True)
+
 
 def encode_image(image_path):
     while True:
@@ -25,17 +37,19 @@ def encode_image(image_path):
 
 
 def play_audio(text):
-    audio = generate(text, voice=os.environ.get("ELEVENLABS_VOICE_ID"))
+    audio = generate(text=text,
+                     voice=os.environ.get("ELEVENLABS_VOICE_ID"),
+                     model="eleven_multilingual_v2")
 
     unique_id = base64.urlsafe_b64encode(os.urandom(30)).decode("utf-8").rstrip("=")
-    dir_path = os.path.join("narration", unique_id)
-    os.makedirs(dir_path, exist_ok=True)
-    file_path = os.path.join(dir_path, "audio.wav")
+    dir_path = "narration"
+    file_path = os.path.join(dir_path, f"{unique_id}.wav")
 
     with open(file_path, "wb") as f:
         f.write(audio)
 
     play(audio)
+    os.remove(file_path)
 
 
 def generate_new_line(base64_image):
@@ -43,7 +57,6 @@ def generate_new_line(base64_image):
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "Describe this image"},
                 {
                     "type": "image_url",
                     "image_url": f"data:image/jpeg;base64,{base64_image}",
@@ -53,49 +66,84 @@ def generate_new_line(base64_image):
     ]
 
 
-def analyze_image(base64_image, script):
+def analyze_image(base64_image):
     response = client.chat.completions.create(
         model="gpt-4-vision-preview",
         messages=[
-            {
-                "role": "system",
-                "content": """
-                You are Sir David Attenborough. Narrate the picture of the human as if it is a nature documentary.
-                Make it snarky and funny. Don't repeat yourself. Make it short. If I do anything remotely interesting, make a big deal about it!
+                     {
+                         "role": "system",
+                         "content": """
+                You are a famous Geosuessr player Trevor Rainbolt. 
+                You see a screenshot from a Geoguessr game. 
+                Act like you are playing this game on Twitch and comment on it.
+                If you see the gameplay: Tell us your thought process. Make it short. Two sentences maximum. 
+                Tell us what country and area we are in given the visual clues. 
+                Don't repeat yourself. Make it informal.
+                If you see the result screen: Comment on the score only. If the guess score is over 4000, say `Nice`, or `I'll take it`, or `Close enough`, or `That was easy`.
                 """,
-            },
-        ]
-        + script
-        + generate_new_line(base64_image),
-        max_tokens=500,
+                     },
+                 ]
+                 + generate_new_line(base64_image),
+        max_tokens=256,
     )
     response_text = response.choices[0].message.content
     return response_text
 
 
+def on_release(key):
+    if key == keyboard.Key.space:
+        # Execute the main function
+        execute()
+
+    if key == keyboard.Key.esc:
+        # Stop listener
+        return False
+
+
+def capture_screen():
+    # Capture the screen
+    frame = pyautogui.screenshot()
+
+    # Convert the frame to a PIL image
+    pil_img = Image.fromarray(np.array(frame))
+
+    # Convert the PIL image back to an OpenCV image
+    frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # Save the frame as an image file
+    print("📸 Let's go! Saving screenshot.")
+    path = f"{folder}/frame.jpg"
+    cv2.imwrite(path, frame)
+
+
+def execute():
+
+    # Wait for 3 seconds
+    time.sleep(3)
+
+    # Make a screenshot
+    capture_screen()
+
+    # Path to the image
+    image_path = os.path.join(os.getcwd(), "frames/frame.jpg")
+
+    # getting the base64 encoding
+    base64_image = encode_image(image_path)
+
+    # Analyze image
+    print("👀 Trevor is watching...")
+    analysis = analyze_image(base64_image)
+
+    print("🎙️ Trevor says:")
+    print(analysis)
+
+    play_audio(analysis)
+
+
 def main():
-    script = []
-
-    while True:
-        # path to your image
-        image_path = os.path.join(os.getcwd(), "./frames/frame.jpg")
-
-        # getting the base64 encoding
-        base64_image = encode_image(image_path)
-
-        # analyze posture
-        print("👀 David is watching...")
-        analysis = analyze_image(base64_image, script=script)
-
-        print("🎙️ David says:")
-        print(analysis)
-
-        play_audio(analysis)
-
-        script = script + [{"role": "assistant", "content": analysis}]
-
-        # wait for 5 seconds
-        time.sleep(5)
+    # Collect spacebar clicks
+    with keyboard.Listener(on_release=on_release) as listener:
+        listener.join()
 
 
 if __name__ == "__main__":
